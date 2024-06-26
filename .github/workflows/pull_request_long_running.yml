@@ -1,0 +1,152 @@
+name: Long-Running
+
+on:
+  pull_request:
+    branches: [stable, development, '*.x']
+    paths-ignore:
+      - 'LICENSE*'
+      - '.gitignore'
+      - '**.md'
+      - '**.adoc'
+      - '*.txt'
+
+jobs:
+  build-quarkus:
+    concurrency:
+      group: pull_request_long_running-${{ github.event_name }}-${{ github.head_ref }}-${{ matrix.module }}-${{ matrix.java-version }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module: [
+          "kotlin/school-timetabling", "java/bed-allocation",
+          "java/conference-scheduling", "java/employee-scheduling", "java/facility-location",
+          "java/flight-crew-scheduling", "java/food-packaging", "java/maintenance-scheduling",
+          "java/meeting-scheduling", "java/order-picking", "java/project-job-scheduling",
+          "java/school-timetabling", "java/sports-league-scheduling", "java/task-assigning",
+          "java/tournament-scheduling", "java/vehicle-routing"
+        ]
+        java-version: [ 17 ] # Only the first supported LTS; already too many jobs here.
+    timeout-minutes: 120
+    steps:
+      # Clone timefold-solver
+      # Need to check for stale repo, since Github is not aware of the build chain and therefore doesn't automate it.
+      - name: Checkout timefold-solver (PR) # Checkout the PR branch first, if it exists
+        id: checkout-solver
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          repository: ${{ github.actor }}/timefold-solver
+          ref: ${{ github.head_ref }}
+          path: ./timefold-solver
+          fetch-depth: 0 # Otherwise merge will fail on account of not having history.
+      - name: Checkout timefold-solver (main) # Checkout the main branch if the PR branch does not exist
+        if: steps.checkout-solver.outcome != 'success'
+        uses: actions/checkout@v4
+        with:
+          repository: TimefoldAI/timefold-solver
+          ref: main
+          path: ./timefold-solver
+          fetch-depth: 0 # Otherwise merge will fail on account of not having history.
+      - name: Prevent stale fork of timefold-solver
+        if: steps.checkout-solver.outcome == 'success'
+        env:
+          BLESSED_REPO: "timefold-solver"
+          BLESSED_BRANCH: ${{ endsWith(github.head_ref, '.x') && github.head_ref || 'main' }}
+        shell: bash
+        working-directory: ./timefold-solver
+        run: .github/scripts/prevent_stale_fork.sh
+
+      # Clone timefold-quickstarts
+      # No need to check for stale repo, as Github merges the main repo into the fork automatically.
+      - name: Checkout timefold-quickstarts
+        uses: actions/checkout@v4
+        with:
+          path: './timefold-quickstarts'
+
+      # Build and test
+      - name: "Setup GraalVM native image"
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: ${{matrix.java-version}}
+          distribution: 'graalvm-community'
+          components: 'native-image'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache: 'maven'
+
+      - name: Quickly build timefold-solver
+        working-directory: ./timefold-solver
+        run: mvn -B -Dquickly clean install
+      - name: Test timefold-quickstarts (slow tests)
+        working-directory: ./timefold-quickstarts/${{matrix.module}}
+        run: mvn -B -Dslowly verify
+      - name: Test timefold-quickstarts (native tests)
+        working-directory: ./timefold-quickstarts/${{matrix.module}}
+        run: mvn -B -Dnative -Pnative verify
+  build-spring-boot:
+    concurrency:
+      group: pull_request_long_running-${{ github.event_name }}-${{ github.head_ref }}-${{ matrix.module }}-${{ matrix.java-version }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module: [
+          "java/spring-boot-integration"
+        ]
+        java-version: [ 17 ] # Only the first supported LTS; already too many jobs here.
+    timeout-minutes: 120
+    steps:
+      # Clone timefold-solver
+      # Need to check for stale repo, since Github is not aware of the build chain and therefore doesn't automate it.
+      - name: Checkout timefold-solver (PR) # Checkout the PR branch first, if it exists
+        id: checkout-solver
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          repository: ${{ github.actor }}/timefold-solver
+          ref: ${{ github.head_ref }}
+          path: ./timefold-solver
+          fetch-depth: 0 # Otherwise merge will fail on account of not having history.
+      - name: Checkout timefold-solver (main) # Checkout the main branch if the PR branch does not exist
+        if: steps.checkout-solver.outcome != 'success'
+        uses: actions/checkout@v4
+        with:
+          repository: TimefoldAI/timefold-solver
+          ref: main
+          path: ./timefold-solver
+          fetch-depth: 0 # Otherwise merge will fail on account of not having history.
+      - name: Prevent stale fork of timefold-solver
+        if: steps.checkout-solver.outcome == 'success'
+        env:
+          BLESSED_REPO: "timefold-solver"
+          BLESSED_BRANCH: ${{ endsWith(github.head_ref, '.x') && github.head_ref || 'main' }}
+        shell: bash
+        working-directory: ./timefold-solver
+        run: .github/scripts/prevent_stale_fork.sh
+
+      # Clone timefold-quickstarts
+      # No need to check for stale repo, as Github merges the main repo into the fork automatically.
+      - name: Checkout timefold-quickstarts
+        uses: actions/checkout@v4
+        with:
+          path: './timefold-quickstarts'
+
+      # Build and test
+      - name: "Setup GraalVM native image"
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: ${{matrix.java-version}}
+          version: 23.0.4
+          distribution: 'liberica'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache: 'maven'
+
+      - name: Quickly build timefold-solver
+        working-directory: ./timefold-solver
+        run: mvn -B -Dquickly clean install
+      - name: Test timefold-quickstarts (slow tests)
+        working-directory: ./timefold-quickstarts/${{matrix.module}}
+        run: mvn -B -Dslowly verify
+      - name: Test timefold-quickstarts (native tests)
+        working-directory: ./timefold-quickstarts/${{matrix.module}}
+        run: mvn -B -PnativeTest verify

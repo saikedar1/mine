@@ -1,0 +1,84 @@
+name: Gradle
+
+on:
+  push:
+    branches: [stable, development, '*.x']
+    paths:
+      - '**/*.gradle'
+      - '**/*.java'
+      - '**/*.kt'
+      - '**/*.versions.toml'
+      - '**/versions.properties'
+      - '.github/**/*.yml'
+  pull_request:
+    branches: [stable, development, '*.x']
+    paths:
+      - '**/*.gradle'
+      - '**/*.java'
+      - '**/*.kt'
+      - '**/*.versions.toml'
+      - '**/versions.properties'
+      - '.github/**/*.yml'
+
+jobs:
+  build:
+    concurrency:
+      group: pull_request_gradle-${{ github.event_name }}-${{ github.head_ref }}-${{ matrix.module }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module: ['java/hello-world', 'java/school-timetabling', 'java/spring-boot-integration']
+        java-version: [ 17 ] # Only the first supported LTS; already too many jobs here.
+    timeout-minutes: 120
+    steps:
+      # Clone timefold-solver
+      # Need to check for stale repo, since Github is not aware of the build chain and therefore doesn't automate it.
+      - name: Checkout timefold-solver (PR) # Checkout the PR branch first, if it exists
+        if: github.head_ref # Only true if this is a PR.
+        id: checkout-solver-pr
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          repository: ${{ github.actor }}/timefold-solver
+          ref: ${{ github.head_ref }}
+          path: ./timefold-solver
+          fetch-depth: 0 # Otherwise merge will fail on account of not having history.
+      - name: Checkout timefold-solver (main) # Checkout the main branch if the PR branch does not exist
+        if: ${{ steps.checkout-solver-pr.outcome != 'success' }}
+        uses: actions/checkout@v4
+        with:
+          repository: TimefoldAI/timefold-solver
+          ref: main
+          path: ./timefold-solver
+          fetch-depth: 0 # Otherwise merge will fail on account of not having history.
+      - name: Prevent stale fork of timefold-solver # Solver can't be stale if development/stable branch requested.
+        if: ${{ steps.checkout-solver-pr.outcome == 'success' }}
+        env:
+          BLESSED_REPO: "timefold-solver"
+          BLESSED_BRANCH: ${{ endsWith(github.head_ref, '.x') && github.head_ref || 'main' }}
+        shell: bash
+        working-directory: ./timefold-solver
+        run: .github/scripts/prevent_stale_fork.sh
+
+      # Clone timefold-quickstarts
+      # No need to check for stale repo, as Github merges the main repo into the fork automatically.
+      - name: Checkout timefold-quickstarts
+        uses: actions/checkout@v4
+        with:
+          path: './timefold-quickstarts'
+
+      # Build the solver
+      - name: "Setup Java and Gradle"
+        uses: actions/setup-java@v3
+        with:
+          java-version: ${{matrix.java-version}}
+          distribution: 'temurin'
+          cache: 'gradle'
+      - name: Quickly build timefold-solver
+        working-directory: ./timefold-solver
+        run: mvn -B -Dquickly clean install
+
+      - name: Build and test timefold-quickstarts
+        working-directory: ./timefold-quickstarts/${{ matrix.module }}
+        run: gradle build
